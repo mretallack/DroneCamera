@@ -20,25 +20,27 @@ Native Android app (Kotlin) using a single-activity architecture. The app commun
 ┌─────────────────────────────────────────┐
 │          DroneStreamViewModel           │
 │  - Stream state (idle/connecting/live)  │
+│  - WiFi connection state                │
 │  - Connection status                    │
 └──────────────┬──────────────────────────┘
                │
-               ▼
-┌─────────────────────────────────────────┐
-│          DroneConnection                │
-│  - UDP socket management                │
-│  - Heartbeat sender (1s interval)       │
-│  - Packet receiver                      │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│          FrameAssembler                 │
-│  - Packet header parsing (0x6363)       │
-│  - Multi-packet frame assembly          │
-│  - VGA deobfuscation                    │
-│  - JPEG decode → Bitmap                 │
-└─────────────────────────────────────────┘
+          ┌────┴────┐
+          ▼         ▼
+┌──────────────┐  ┌──────────────────────┐
+│ WifiConnector│  │   DroneConnection    │
+│ - Auto-conn  │  │   - UDP socket mgmt  │
+│ - Network    │  │   - Heartbeat sender │
+│   binding    │  │   - Packet receiver  │
+└──────────────┘  └──────────┬───────────┘
+                             │
+                             ▼
+                  ┌──────────────────────┐
+                  │   FrameAssembler     │
+                  │   - Header parsing   │
+                  │   - Frame assembly   │
+                  │   - Deobfuscation    │
+                  │   - JPEG → Bitmap    │
+                  └──────────────────────┘
 ```
 
 ## Components
@@ -57,12 +59,13 @@ Uses `DroneStreamViewModel` to survive configuration changes.
 Manages stream lifecycle and exposes state via `StateFlow`:
 
 ```kotlin
-enum class StreamState { IDLE, CONNECTING, STREAMING, ERROR }
+enum class StreamState { IDLE, CONNECTING_WIFI, CONNECTING_DRONE, STREAMING, ERROR }
 
 class DroneStreamViewModel : ViewModel() {
     val streamState: StateFlow<StreamState>
     val currentFrame: StateFlow<Bitmap?>
     
+    fun connectWifi(context: Context)
     fun startStream()
     fun stopStream()
 }
@@ -70,12 +73,58 @@ class DroneStreamViewModel : ViewModel() {
 
 Launches coroutines for the connection and frame assembly on `Dispatchers.IO`.
 
-### 3. DroneConnection
+### 3. WifiConnector
+
+Handles automatic WiFi connection to the drone using `WifiNetworkSpecifier` (API 29+):
+
+```kotlin
+class WifiConnector(private val context: Context) {
+    
+    fun connect(onNetworkAvailable: (Network) -> Unit, onUnavailable: () -> Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            connectWithSpecifier(onNetworkAvailable, onUnavailable)
+        } else {
+            // API 26-28: check if already on drone WiFi, otherwise prompt user
+            checkExistingConnection(onNetworkAvailable, onUnavailable)
+        }
+    }
+    
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun connectWithSpecifier(
+        onNetworkAvailable: (Network) -> Unit,
+        onUnavailable: () -> Unit
+    ) {
+        val specifier = WifiNetworkSpecifier.Builder()
+            .setSsidPattern(PatternMatcher("HASAKEE", PatternMatcher.PATTERN_PREFIX))
+            .build()
+        
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .setNetworkSpecifier(specifier)
+            .build()
+        
+        connectivityManager.requestNetwork(request, object : NetworkCallback() {
+            override fun onAvailable(network: Network) = onNetworkAvailable(network)
+            override fun onUnavailable() = onUnavailable()
+        })
+    }
+    
+    fun disconnect() { /* unregister callback */ }
+}
+```
+
+Key details:
+- `removeCapability(NET_CAPABILITY_INTERNET)` — drone WiFi has no internet, this prevents Android from rejecting it
+- The returned `Network` object must be used to bind the UDP socket: `network.bindSocket(socket)` — this ensures traffic goes over the drone WiFi even if the device has mobile data
+- On API 26-28, falls back to checking if current WiFi SSID matches `HASAKEE*` pattern
+
+### 4. DroneConnection
 
 Handles all UDP communication with the drone:
 
 ```kotlin
-class DroneConnection {
+class DroneConnection(private val network: Network?) {
     companion object {
         const val DRONE_IP = "192.168.0.1"
         const val DRONE_PORT = 40000
@@ -89,11 +138,12 @@ class DroneConnection {
 ```
 
 - Binds a `DatagramSocket` on an ephemeral port
+- If `network` is provided (API 29+), calls `network.bindSocket(socket)` to route traffic over drone WiFi
 - Sends heartbeat every 1 second via a coroutine
 - Receives packets in a loop, emitting them as a `Flow<ByteArray>`
 - Socket receive buffer set to 64KB
 
-### 4. FrameAssembler
+### 5. FrameAssembler
 
 Parses 0x6363 packets and assembles complete JPEG frames:
 
@@ -114,7 +164,7 @@ class FrameAssembler {
    - Decode JPEG bytes to `Bitmap` via `BitmapFactory.decodeByteArray()`
 6. If decode fails, return null (ViewModel falls back to previous frame)
 
-### 5. VGA Deobfuscation
+### 6. VGA Deobfuscation
 
 Direct port of the Python/native implementation:
 
@@ -137,36 +187,44 @@ fun encodeIndex(frameId: Int, length: Int): Int {
 }
 ```
 
-## Sequence Diagram: Start Stream
+## Sequence Diagram: Connect and Start Stream
 
 ```
-User          MainActivity    ViewModel      DroneConnection    FrameAssembler    Drone
- │                │               │               │                  │              │
- │  Tap Start     │               │               │                  │              │
- │───────────────>│               │               │                  │              │
- │                │ startStream() │               │                  │              │
- │                │──────────────>│               │                  │              │
- │                │               │  connect()    │                  │              │
- │                │               │──────────────>│                  │              │
- │                │               │               │  Heartbeat (UDP) │              │
- │                │               │               │─────────────────────────────────>│
- │                │               │               │                  │              │
- │                │               │               │  Video packets   │              │
- │                │               │               │<─────────────────────────────────│
- │                │               │               │                  │              │
- │                │               │  Flow<ByteArray>                 │              │
- │                │               │<──────────────│                  │              │
- │                │               │               │                  │              │
- │                │               │  processPacket()                 │              │
- │                │               │─────────────────────────────────>│              │
- │                │               │                    Bitmap?       │              │
- │                │               │<─────────────────────────────────│              │
- │                │               │               │                  │              │
- │                │  StateFlow<Bitmap>            │                  │              │
- │                │<──────────────│               │                  │              │
- │                │               │               │                  │              │
- │  Render frame  │               │               │                  │              │
- │<───────────────│               │               │                  │              │
+User        MainActivity    ViewModel     WifiConnector   DroneConnection  FrameAssembler  Drone
+ │               │              │              │               │               │            │
+ │  App Launch   │              │              │               │               │            │
+ │──────────────>│              │              │               │               │            │
+ │               │ connectWifi()│              │               │               │            │
+ │               │─────────────>│              │               │               │            │
+ │               │              │  connect()   │               │               │            │
+ │               │              │─────────────>│               │               │            │
+ │               │              │              │ WifiNetworkSpecifier           │            │
+ │               │              │              │ (system dialog on first use)   │            │
+ │               │              │              │──────────┐    │               │            │
+ │               │              │              │          │    │               │            │
+ │               │              │              │<─────────┘    │               │            │
+ │               │              │  onAvailable(network)        │               │            │
+ │               │              │<─────────────│               │               │            │
+ │               │              │              │               │               │            │
+ │  Tap Start    │              │              │               │               │            │
+ │──────────────>│ startStream()│              │               │               │            │
+ │               │─────────────>│              │               │               │            │
+ │               │              │  connect(network)            │               │            │
+ │               │              │─────────────────────────────>│               │            │
+ │               │              │              │               │  Heartbeat     │            │
+ │               │              │              │               │───────────────────────────>│
+ │               │              │              │               │  Video packets │            │
+ │               │              │              │               │<──────────────────────────│
+ │               │              │  Flow<ByteArray>             │               │            │
+ │               │              │<─────────────────────────────│               │            │
+ │               │              │  processPacket()             │               │            │
+ │               │              │─────────────────────────────────────────────>│            │
+ │               │              │                              │    Bitmap?    │            │
+ │               │              │<─────────────────────────────────────────────│            │
+ │               │  StateFlow   │              │               │               │            │
+ │               │<─────────────│              │               │               │            │
+ │  Render frame │              │              │               │               │            │
+ │<──────────────│              │              │               │               │            │
 ```
 
 ## Rendering Strategy
@@ -200,11 +258,13 @@ fun renderFrame(bitmap: Bitmap) {
 
 | Scenario | Handling |
 |----------|----------|
-| Not on WiFi | Show prompt to connect to drone WiFi |
+| API 29+, no drone WiFi found | Show "No drone network found" with retry |
+| API 29+, user denies network | Show prompt explaining why drone WiFi is needed |
+| API 26-28, not on drone WiFi | Show manual connection instructions |
 | No response from drone | Timeout after 5s, show retry button |
 | Corrupt JPEG frame | Skip frame, keep displaying previous good frame |
 | Socket error | Transition to ERROR state, allow retry |
-| App backgrounded | Stop stream, release socket |
+| App backgrounded | Stop stream, release socket, release WiFi network |
 
 ## Project Structure
 
@@ -214,14 +274,96 @@ app/
 │   ├── java/com/dronecamera/
 │   │   ├── MainActivity.kt
 │   │   ├── DroneStreamViewModel.kt
+│   │   ├── WifiConnector.kt
 │   │   ├── DroneConnection.kt
 │   │   └── FrameAssembler.kt
 │   ├── res/
 │   │   ├── layout/activity_main.xml
 │   │   └── values/strings.xml
 │   └── AndroidManifest.xml
+├── src/test/
+│   └── java/com/dronecamera/
+│       ├── FrameAssemblerTest.kt
+│       ├── DroneConnectionTest.kt
+│       └── DroneStreamViewModelTest.kt
+├── src/androidTest/
+│   └── java/com/dronecamera/
+│       ├── WifiConnectorTest.kt
+│       └── MainActivityTest.kt
 ├── build.gradle.kts
 └── gradle/
+```
+
+## Testing Strategy
+
+### Unit Tests (`src/test/`) — JUnit 5 + MockK
+
+Unit tests run on the JVM without an Android device. All components with Android dependencies are mocked.
+
+#### FrameAssemblerTest
+
+The core protocol logic — most critical to test since it's a direct port of the reverse-engineered protocol.
+
+- Parse valid 0x6363 packet header and extract all fields correctly
+- Reject packets with invalid magic bytes (not `0x6363`)
+- Reject packets shorter than minimum header length (12 bytes)
+- Assemble a complete frame from multiple sequential packets
+- Start new frame when `frame_id` changes (previous frame emitted)
+- First packet (`sequence_id == 1`) must start with JPEG SOI (`0xFFD8`)
+- Reject first packet that doesn't start with JPEG SOI
+- Append subsequent packets (`sequence_id > 1`) to current frame
+- Apply VGA deobfuscation when `frame_type != 0x02`
+- Skip deobfuscation when `frame_type == 0x02`
+- `encodeIndex` returns correct index for even-length data
+- `encodeIndex` returns correct index for odd-length data
+- `encodeIndex` returns 0 for zero-length data
+- Return null for corrupt JPEG data that fails decode
+
+#### DroneConnectionTest
+
+- Heartbeat packet matches expected bytes (`63 63 01 00 00 00 00`)
+- Emits timeout signal when no packets received for 3 seconds
+- Disconnect closes socket and stops heartbeat coroutine
+
+#### DroneStreamViewModelTest
+
+- State transitions: IDLE → CONNECTING_WIFI → CONNECTING_DRONE → STREAMING
+- State transitions to ERROR on WiFi connection failure
+- State transitions to ERROR on drone connection timeout
+- stopStream returns state to IDLE
+- currentFrame updates when FrameAssembler produces a Bitmap
+- currentFrame retains previous frame when assembler returns null
+
+### Integration Tests (`src/androidTest/`) — AndroidX Test + Espresso
+
+Integration tests run on a real device or emulator and verify Android-specific behaviour.
+
+#### WifiConnectorTest
+
+- On API 29+: `WifiNetworkSpecifier` is built with correct SSID prefix pattern
+- On API 29+: `NetworkRequest` removes `NET_CAPABILITY_INTERNET`
+- On API 26-28: falls back to checking current WiFi SSID
+- Disconnect unregisters the network callback
+
+#### MainActivityTest
+
+- Start button is disabled before WiFi connection
+- Start button is enabled after WiFi connection
+- Tapping Start transitions UI to streaming state
+- Tapping Stop transitions UI back to idle state
+- Connection lost warning appears when stream times out
+- Screen stays on while streaming (keep screen on flag)
+
+### Test Dependencies
+
+```kotlin
+// build.gradle.kts
+testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+testImplementation("io.mockk:mockk:1.13.10")
+testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
+androidTestImplementation("androidx.test.ext:junit:1.1.5")
+androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
+androidTestImplementation("androidx.test:runner:1.5.2")
 ```
 
 ## Dependencies
@@ -236,6 +378,7 @@ app/
 <uses-permission android:name="android.permission.INTERNET" />
 <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+<uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 ```
 
 ## Build Configuration

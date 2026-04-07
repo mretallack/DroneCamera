@@ -6,14 +6,17 @@ An Android app to view the live MJPEG video feed from a HASAKEE FPV drone over W
 
 ## User Stories
 
-### US-1: Connect to Drone WiFi
+### US-1: Auto-Connect to Drone WiFi
 
-As a user, I want to connect my Android device to the drone's WiFi network so that I can communicate with the drone.
+As a user, I want the app to automatically connect to the drone's WiFi network so I don't have to manually switch networks.
 
 **Acceptance Criteria:**
-- WHEN the app launches THE SYSTEM SHALL check if the device is connected to a WiFi network
-- WHEN the device is not connected to WiFi THE SYSTEM SHALL display a prompt directing the user to connect to the drone's WiFi (typically `HASAKEE-WiFi-XXXXX`)
-- WHEN the device is connected to WiFi THE SYSTEM SHALL enable the "Start Stream" button
+- WHEN the app launches on Android 10+ (API 29+) THE SYSTEM SHALL use `WifiNetworkSpecifier` to request connection to a network matching SSID prefix `HASAKEE`
+- WHEN the system shows the network selection dialog THE SYSTEM SHALL display the matching drone WiFi network for user approval
+- WHEN the user has previously approved the network THE SYSTEM SHALL auto-connect without showing the dialog again
+- WHEN the app launches on Android 8-9 (API 26-28) THE SYSTEM SHALL display a prompt directing the user to manually connect to the drone's WiFi (typically `HASAKEE-WiFi-XXXXX`)
+- WHEN the device is connected to the drone WiFi THE SYSTEM SHALL bind the UDP socket to the drone network (required for `WifiNetworkSpecifier` local-only connections)
+- WHEN the WiFi connection is established THE SYSTEM SHALL enable the "Start Stream" button
 
 ### US-2: Start Video Stream
 
