@@ -354,6 +354,13 @@ Integration tests run on a real device or emulator and verify Android-specific b
 - Connection lost warning appears when stream times out
 - Screen stays on while streaming (keep screen on flag)
 
+### Test Resources
+
+- Android phone available for on-device testing (unit tests, integration tests, manual testing)
+- HASAKEE FPV drone is not currently available but can be requested for end-to-end testing
+- Unit tests and integration tests can run without the drone (mocked protocol data)
+- Full end-to-end testing (WiFi auto-connect → video stream) requires the physical drone
+
 ### Test Dependencies
 
 ```kotlin
