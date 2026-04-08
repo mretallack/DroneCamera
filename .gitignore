@@ -1,13 +1,33 @@
+# Android
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+bin/
+gen/
+out/
+build/
+.gradle/
+local.properties
 *.iml
-.gradle
-/local.properties
-/.idea
+.idea/
 .DS_Store
-/build
-/captures
+captures/
 .externalNativeBuild
 .cxx
-local.properties
+
+# App build
 /app/build
+
+# Python
 venv/
 __pycache__/
+*.pyc
+
+# Misc
+*.log
+*.swp
+*~
+.env
+*.keystore

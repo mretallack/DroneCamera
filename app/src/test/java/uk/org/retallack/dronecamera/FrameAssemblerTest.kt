@@ -1,4 +1,4 @@
-package com.dronecamera
+package uk.org.retallack.dronecamera
 
 import org.junit.Assert.*
 import org.junit.Before

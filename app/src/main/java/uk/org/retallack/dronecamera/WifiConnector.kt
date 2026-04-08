@@ -1,4 +1,4 @@
-package com.dronecamera
+package uk.org.retallack.dronecamera
 
 import android.content.Context
 import android.net.ConnectivityManager

@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.dronecamera"
+    namespace = "uk.org.retallack.dronecamera"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.dronecamera"
+        applicationId = "uk.org.retallack.dronecamera"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -16,10 +16,27 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            val ks = System.getenv("KEYSTORE_PATH")
+            if (ks != null) {
+                storeFile = file(ks)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = if (System.getenv("KEYSTORE_PATH") != null) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
