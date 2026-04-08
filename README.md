@@ -23,6 +23,10 @@ Other HASAKEE/Lewei-based drones using the same protocol may also work.
 
 ## Screenshots
 
+| Streaming | WiFi Auto-Connect |
+|:---------:|:------------------:|
+| <img src="screenshots/streaming.jpg" width="400" alt="Live video stream"> | <img src="screenshots/wifi-connect.jpg" width="400" alt="WiFi auto-connect dialog"> |
+
 *App icon:*
 
 <img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="96" alt="App Icon">
