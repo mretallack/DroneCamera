@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">DroneCamera</string>
+    <string name="btn_start">Start</string>
+    <string name="btn_stop">Stop</string>
+    <string name="status_idle">Tap Start to connect</string>
+    <string name="status_connecting_wifi">Connecting to drone WiFi…</string>
+    <string name="status_connecting_drone">Connecting to drone…</string>
+    <string name="status_streaming">Streaming</string>
+    <string name="status_error">Connection lost</string>
+    <string name="status_description">Connection status</string>
+</resources>
